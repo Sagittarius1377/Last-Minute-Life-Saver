@@ -11,3 +11,4 @@ load_dotenv()  # reads .env file if present (local dev only — Cloud Run uses r
 # Placeholders — will be used starting Phase 3 (Gemini) and Phase 2 (Firestore)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 FIRESTORE_PROJECT_ID = os.getenv("FIRESTORE_PROJECT_ID", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
