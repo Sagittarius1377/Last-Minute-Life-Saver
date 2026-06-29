@@ -7,6 +7,7 @@ WORKDIR /app
 # --- Install system dependencies (kept minimal for now) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Copy requirements first (better Docker layer caching) ---

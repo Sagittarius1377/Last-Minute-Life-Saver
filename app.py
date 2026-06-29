@@ -114,7 +114,12 @@ def render_deadline_alerts(task_list):
     <meta refresh> tag above. It can't wake up a fully closed browser tab;
     that needs a push-notification backend, a different architecture.
     """
-    now = dt.datetime.now()
+    # Use explicit IST time for comparisons — never rely on the server's
+    # system clock. Cloud Run containers run on UTC by default, while
+    # deadlines are always entered in IST, so comparing against a naive
+    # dt.datetime.now() would be silently off by 5.5 hours in production.
+    from zoneinfo import ZoneInfo
+    now = dt.datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
     overdue_tasks = []
     due_soon_tasks = []
 
@@ -344,6 +349,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("🔔 In-app alerts are on — keep this tab open to get notified when deadlines hit.")
+    st.caption("Built for the BlockseBlock Hackathon")
 
 # --- Main page header ---
 st.title("⏰ Last-Minute Life Saver")
@@ -499,7 +505,16 @@ with st.form("new_task_form", clear_on_submit=True):
             if new_date and new_time.strip():
                 try:
                     parsed_time = dt.datetime.strptime(new_time.strip(), "%H:%M").time()
-                    deadline_str = f"{new_date.strftime('%Y-%m-%d')} {parsed_time.strftime('%H:%M')}"
+                    candidate_deadline = dt.datetime.combine(new_date, parsed_time)
+
+                    from zoneinfo import ZoneInfo
+                    now_ist = dt.datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+
+                    if candidate_deadline <= now_ist:
+                        st.error("That time has already passed today. Please choose a future time. Task saved with date only.")
+                        deadline_str = new_date.strftime('%Y-%m-%d')
+                    else:
+                        deadline_str = f"{new_date.strftime('%Y-%m-%d')} {parsed_time.strftime('%H:%M')}"
                 except ValueError:
                     st.error("Time must be in 24-hour HH:MM format, e.g. 17:00 for 5 PM. Task saved with date only.")
                     deadline_str = new_date.strftime('%Y-%m-%d')
