@@ -1,10 +1,21 @@
+"""
+Last-Minute Life Saver
+Phase 7 (updated): Real username/password login (auto-registers new users
+for frictionless hackathon testing) + in-app calendar view + reliable
+in-app deadline alerts via st.toast.
+"""
 
-
+import uuid
+import calendar as cal_module
+import datetime as dt
 
 import streamlit as st
+import streamlit.components.v1 as components
+from streamlit_autorefresh import st_autorefresh
 from services import firestore_service
-# ... your other imports ...
-
+from services.firestore_service import add_task, get_all_tasks, update_task_status, delete_task, log_pattern, get_recent_patterns, save_calendar_event_id
+from services.gemini_service import breakdown_task, negotiate_deadlines
+from services.calendar_service import push_task_to_calendar, get_upcoming_events, mark_event_completed
 
 st.set_page_config(page_title="Last-Minute Life Saver", page_icon="⏰", layout="wide")
 
@@ -18,24 +29,24 @@ if "user_id" not in st.session_state:
 if not st.session_state.authenticated:
     st.title("🚨 Last-Minute Life Saver")
     st.subheader("Your AI-Powered Proactive Productivity Companion")
-    
+
     col1, col2 = st.columns([1, 1])
-    
+
     with col1:
         st.markdown("""
         ### Welcome to your intelligent workspace.
-        This companion actively monitors your deadlines, negotiates adjustments via AI, 
+        This companion actively monitors your deadlines, negotiates adjustments via AI,
         and prevents missed commitments.
-        
-        *💡 **Note for Judges:** Enter any unique username and password. If the account 
+
+        *💡 **Note for Judges:** Enter any unique username and password. If the account
         doesn't exist, it will be automatically created instantly for your testing session.*
         """)
-        
+
     with col2:
         st.write("### 🔒 Secure Dashboard Access")
         username_input = st.text_input("Username", placeholder="e.g., harry").strip()
         password_input = st.text_input("Password", type="password", placeholder="••••••••")
-        
+
         if st.button("Access My Companion Dashboard", use_container_width=True):
             if username_input and password_input:
                 user_id, msg, success = firestore_service.authenticate_or_register(username_input, password_input)
@@ -48,46 +59,23 @@ if not st.session_state.authenticated:
                     st.error(msg)
             else:
                 st.warning("Please fill out both username and password fields.")
-    st.stop() # Halts app execution here so unauthenticated users cannot see the dashboard
+    st.stop()  # Halts app execution here so unauthenticated users cannot see the dashboard
 
 # --- LIVE AUTHENTICATED DASHBOARD ---
 # Everything below this line only executes if st.session_state.authenticated is True
+USER_ID = st.session_state.user_id
 
-# Add a clean logout button or session indicator in the sidebar
+# Reruns the script every 20 seconds via Streamlit's own internal mechanism
+# (not a real page reload), so deadline alerts get rechecked automatically
+# without ever touching/resetting st.session_state — login stays intact.
+st_autorefresh(interval=20000, key="deadline_check_refresh")
+
 with st.sidebar:
-    st.write(f"👤 **Logged in as:** `{st.session_state.user_id}`")
+    st.write(f"👤 **Logged in as:** `{USER_ID}`")
     if st.button("Log Out"):
         st.session_state.authenticated = False
         st.session_state.user_id = None
         st.rerun()
-
-# -------------------------------------------------------------
-# -------------------------------------------------------------
-
-
-
-
-import uuid
-import calendar as cal_module
-import datetime as dt
-
-import streamlit as st
-import streamlit.components.v1 as components
-from services.firestore_service import add_task, get_all_tasks, update_task_status, delete_task, log_pattern, get_recent_patterns, save_calendar_event_id
-from services.gemini_service import breakdown_task, negotiate_deadlines
-from services.calendar_service import push_task_to_calendar, get_upcoming_events, mark_event_completed
-
-
-# --- Per-session user isolation (no login required) ---
-# Each browser session gets a private, randomly-generated ID on first visit.
-# This is stored in Streamlit's session_state, so it stays the same for the
-# duration of that browser tab/session, but is unique per visitor — meaning
-# two different people (e.g. two hackathon judges) each get their own
-# completely separate task list, never seeing each other's data.
-if "user_id" not in st.session_state:
-    st.session_state["user_id"] = f"session_{uuid.uuid4().hex[:12]}"
-
-USER_ID = st.session_state["user_id"]
 
 # --- Priority styling helpers ---
 PRIORITY_COLORS = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
@@ -111,18 +99,62 @@ done_count = sum(1 for t in tasks if t.get("status") == "done")
 high_priority_pending = sum(1 for t in tasks if t.get("status") != "done" and t.get("priority") == "High")
 
 
+def render_deadline_alerts(task_list):
+    """
+    Shows a persistent, hard-to-miss banner inside the app for overdue or
+    soon-due tasks — using st.error/st.warning instead of st.toast, since
+    toast messages auto-vanish after a few seconds and are easy to miss.
+
+    These banners are also re-shown on every rerun while the condition is
+    still true (overdue stays overdue), so they won't disappear just
+    because the page refreshed.
+
+    Limitation (stated honestly): this only updates when the app reruns —
+    either from your own clicks, or from the auto-refresh added via the
+    <meta refresh> tag above. It can't wake up a fully closed browser tab;
+    that needs a push-notification backend, a different architecture.
+    """
+    now = dt.datetime.now()
+    overdue_tasks = []
+    due_soon_tasks = []
+
+    for t in task_list:
+        if t.get("status") == "done":
+            continue
+        deadline = t.get("deadline", "")
+        if not deadline:
+            continue
+
+        try:
+            if len(deadline) == 10:
+                deadline_dt = dt.datetime.strptime(deadline, "%Y-%m-%d")
+            else:
+                deadline_dt = dt.datetime.strptime(deadline, "%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+
+        if deadline_dt <= now:
+            overdue_tasks.append(t["title"])
+        elif deadline_dt - now <= dt.timedelta(hours=1):
+            due_soon_tasks.append(t["title"])
+
+    if overdue_tasks:
+        st.error(f"⏰ **Overdue:** {', '.join(overdue_tasks)}")
+    if due_soon_tasks:
+        st.warning(f"⚠️ **Due within the hour:** {', '.join(due_soon_tasks)}")
+
+
 def render_browser_notifications(task_list):
     """
-    Schedules a real browser Notification for each pending task with a deadline.
+    Bonus layer alongside render_deadline_alerts: a real OS-level browser
+    popup notification, in addition to the in-app banner (which is the
+    reliable one — this one depends on browser permissions and may not
+    always fire due to platform restrictions on notifications inside
+    Streamlit's sandboxed component iframe).
 
-    Browsers require an actual user click before they'll show the permission
-    prompt, so this renders a visible "Enable Deadline Alerts" button.
-    Clicking it requests permission and fires an immediate confirmation
-    notification so you can verify it's working right away.
-
-    Limitation (by design): this only fires while the tab stays open. A true
-    "even if closed" alarm needs a push-notification backend — different
-    architecture, out of scope for this build.
+    Requires a real click on the "Enable Deadline Alerts" button (browsers
+    block permission prompts that aren't triggered by an actual user
+    gesture). Once granted, fires an immediate confirmation notification.
     """
     import json
 
@@ -187,7 +219,7 @@ def render_browser_notifications(task_list):
 
         function updateUI() {{
             if (Notification.permission === "granted") {{
-                statusEl.innerText = "✅ Deadline alerts are on.";
+                statusEl.innerText = "✅ Browser alerts are on.";
                 btn.style.display = "none";
                 scheduleNotifications();
             }} else if (Notification.permission === "denied") {{
@@ -201,8 +233,8 @@ def render_browser_notifications(task_list):
         btn.addEventListener("click", function() {{
             Notification.requestPermission().then(function(permission) {{
                 if (permission === "granted") {{
-                    new Notification("🎉 Alerts enabled!", {{
-                        body: "You'll get notified when task deadlines hit, as long as this tab stays open."
+                    new Notification("🎉 Browser alerts enabled!", {{
+                        body: "You'll get a popup when task deadlines hit, as long as this tab stays open."
                     }});
                 }}
                 updateUI();
@@ -218,11 +250,8 @@ def render_browser_notifications(task_list):
 def render_month_calendar(task_list, year, month):
     """
     Renders a real visual month-grid calendar (no Google account needed),
-    showing this user's own task deadlines on the correct days. This is
-    what lets every visitor see "their" calendar without OAuth — it's
-    backed entirely by their own per-session Firestore data.
+    showing this user's own task deadlines on the correct days.
     """
-    # Build a map of day-of-month -> list of task titles due that day
     days_with_tasks = {}
     for t in task_list:
         deadline = t.get("deadline", "")
@@ -238,7 +267,6 @@ def render_month_calendar(task_list, year, month):
                 "done": t.get("status") == "done",
             })
 
-    month_name = cal_module.month_name[month]
     cal = cal_module.Calendar(firstweekday=6)  # Sunday-first
     weeks = cal.monthdayscalendar(year, month)
 
@@ -246,7 +274,6 @@ def render_month_calendar(task_list, year, month):
 
     html = f"""
     <div style="font-family: sans-serif;">
-        <h4 style="margin-bottom: 10px;">{month_name} {year}</h4>
         <table style="width: 100%; border-collapse: collapse; table-layout: fixed;">
             <tr>
     """
@@ -268,12 +295,28 @@ def render_month_calendar(task_list, year, month):
 
             day_tasks = days_with_tasks.get(day, [])
             task_html = ""
-            for dt_task in day_tasks[:3]:
+
+            def task_line(dt_task):
                 color = "#999" if dt_task["done"] else "#d9534f"
                 strike = "text-decoration: line-through;" if dt_task["done"] else ""
-                task_html += f'<div style="font-size: 11px; color: {color}; {strike} white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">• {dt_task["title"]}</div>'
-            if len(day_tasks) > 3:
-                task_html += f'<div style="font-size: 10px; color: #aaa;">+{len(day_tasks) - 3} more</div>'
+                return f'<div style="font-size: 11px; color: {color}; {strike} white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">• {dt_task["title"]}</div>'
+
+            if len(day_tasks) <= 3:
+                for dt_task in day_tasks:
+                    task_html += task_line(dt_task)
+            else:
+                # First 3 always visible; the rest are revealed by clicking
+                # "+N more" — uses a native HTML <details> element, which
+                # natively supports click-to-expand with zero JavaScript.
+                for dt_task in day_tasks[:3]:
+                    task_html += task_line(dt_task)
+                remaining_html = "".join(task_line(t) for t in day_tasks[3:])
+                task_html += f'''
+                <details style="font-size: 10px; color: #aaa; cursor: pointer;">
+                    <summary style="cursor: pointer;">+{len(day_tasks) - 3} more</summary>
+                    {remaining_html}
+                </details>
+                '''
 
             html += f'<td style="{cell_style}"><div style="font-size: 12px; font-weight: bold;">{day}</div>{task_html}</td>'
         html += "</tr>"
@@ -282,14 +325,12 @@ def render_month_calendar(task_list, year, month):
     st.markdown(html, unsafe_allow_html=True)
 
 
+render_deadline_alerts(tasks)
 render_browser_notifications(tasks)
 
-# --- Sidebar ---
+# --- Sidebar (continued) ---
 with st.sidebar:
-    st.markdown("# ⏰ Last-Minute Life Saver")
-    st.caption("AI-powered productivity companion")
     st.markdown("---")
-
     col_a, col_b = st.columns(2)
     with col_a:
         st.metric("Pending", pending_count)
@@ -302,9 +343,7 @@ with st.sidebar:
         st.success("🎉 All caught up!")
 
     st.markdown("---")
-    st.caption("🔔 Browser notifications are on — keep this tab open to get alerted when deadlines hit.")
-    st.caption(f"🔒 Your private session: `{USER_ID[-8:]}`")
-    
+    st.caption("🔔 In-app alerts are on — keep this tab open to get notified when deadlines hit.")
 
 # --- Main page header ---
 st.title("⏰ Last-Minute Life Saver")
@@ -320,7 +359,7 @@ if "task_added_message" in st.session_state:
 tab_tasks, tab_calendar = st.tabs(["📋 Your Tasks", "📅 My Calendar"])
 
 with tab_calendar:
-    st.caption("This calendar is private to your session — no Google account needed.")
+    st.caption("This calendar is private to your account — no Google account needed.")
     today = dt.date.today()
     col_prev, col_label, col_next = st.columns([1, 3, 1])
     if "cal_year" not in st.session_state:
@@ -332,6 +371,11 @@ with tab_calendar:
             if st.session_state["cal_month"] == 0:
                 st.session_state["cal_month"] = 12
                 st.session_state["cal_year"] -= 1
+    with col_label:
+        st.markdown(
+            f"<h4 style='text-align: center; margin: 0;'>{cal_module.month_name[st.session_state['cal_month']]} {st.session_state['cal_year']}</h4>",
+            unsafe_allow_html=True
+        )
     with col_next:
         if st.button("Next ▶"):
             st.session_state["cal_month"] += 1
@@ -438,7 +482,7 @@ with st.form("new_task_form", clear_on_submit=True):
     with col1:
         new_title = st.text_input("Task title")
     with col2:
-        new_date = st.date_input("Deadline date (optional)", value=None)
+        new_date = st.date_input("Deadline date (optional)", value=None, min_value=dt.date.today())
     with col3:
         new_time = st.text_input("Time (optional, 24-hr)", placeholder="e.g. 17:00 for 5 PM")
     with col4:
