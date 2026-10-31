@@ -15,7 +15,7 @@ from config import GROQ_API_KEY
 client = Groq(api_key=GROQ_API_KEY)
 
 # Llama 3.3 70B is fast and capable, good fit for this use case
-MODEL_NAME = "llama-3.3-70b-versatile"
+MODEL_NAME = "openai/gpt-oss-120b"
 
 
 def _call_groq(prompt: str) -> str:
