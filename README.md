@@ -3,7 +3,8 @@
 **AI-Powered Proactive Productivity Companion**
 Built for the BlockseBlock Hackathon
 
-🔗 **Live App:** (https://last-minute-life-saver-1059318417052.asia-south1.run.app/)
+
+ 🔗 **Live App:** (https://last-minute-life-saver-b0.streamlit.app/)
 
 ---
 
@@ -96,4 +97,4 @@ gcloud run deploy last-minute-life-saver \
 
 ## Built With
 
-Streamlit · Groq (Llama 3.3 70B) · Google Cloud Firestore · Google Calendar API · Docker · Google Cloud Run
+Streamlit · Groq (openai/gpt-oss-120b) · Google Cloud Firestore · Google Calendar API · Docker · Google Cloud Run 
