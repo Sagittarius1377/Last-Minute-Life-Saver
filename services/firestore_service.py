@@ -8,10 +8,12 @@ user_id comes from a per-browser-session ID generated on first visit
 (no login required) — see get_session_user_id() in app.py.
 """
 
+
 import os
 import hashlib
 from datetime import datetime
 
+import streamlit as st
 from google.cloud import firestore
 from google.oauth2 import service_account
 
@@ -20,15 +22,37 @@ from config import FIRESTORE_PROJECT_ID
 # Path to the service account key, set in .env as GOOGLE_APPLICATION_CREDENTIALS
 KEY_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "firebase-key.json")
 
-
 def get_db():
     """
     Creates and returns a Firestore client.
-    Called fresh each time so Streamlit's rerun model doesn't hold a stale connection.
+    Supports local development and Streamlit Cloud.
     """
-    credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
-    db = firestore.Client(project=FIRESTORE_PROJECT_ID, credentials=credentials)
+    if "firebase_service_account" in st.secrets:
+        # Streamlit Cloud: load credentials from Secrets
+        credentials_info = dict(st.secrets["firebase_service_account"])
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info
+        )
+    else:
+        # Local development: load credentials from JSON file
+        credentials = service_account.Credentials.from_service_account_file(
+            KEY_PATH
+        )
+
+    db = firestore.Client(
+        project=FIRESTORE_PROJECT_ID,
+        credentials=credentials
+    )
     return db
+
+# def get_db():
+#     """
+#     Creates and returns a Firestore client.
+#     Called fresh each time so Streamlit's rerun model doesn't hold a stale connection.
+#     """
+#     credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+#     db = firestore.Client(project=FIRESTORE_PROJECT_ID, credentials=credentials)
+#     return db
 
 
 def add_task(user_id: str, title: str, deadline: str, priority: str):
